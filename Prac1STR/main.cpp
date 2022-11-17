@@ -35,17 +35,16 @@ int main()
            rgbLCD.writech('!');
            cond = false;
         }
-        /*counts = lightSensor.read();
-        for (int i = 0; i<99; i++) {
-            counts = counts + lightSensor.read();
-        }
-        counts = counts / 100;
-        */
+
         counts_ls = lightSensor.read();
+        for (int i = 0; i<100; i++) {
+            counts_ls = counts_ls + lightSensor.read();
+        }
+        counts_ls = counts_ls / 100;
         //printf("Counts: %f\n", counts_ls);
         float lux = calculate_lux(counts_ls);
         printf("Lux: %f\n", lux);
-
+        
         led.period(0.02f);
         led.write(1-lux/200);   //Lux is our max. lux/200 = 0-1
         ThisThread::sleep_for(5ms);
