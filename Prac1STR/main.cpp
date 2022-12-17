@@ -6,7 +6,10 @@
 #include <cstdio>
 #include <string>
 
-#define DEADLINE 600
+//Thist DEADLINE sets the main loop iteration time to 500ms
+#define DEADLINE 612
+#define READ_AND_COMP_LUX_DEADLINE 100
+#define LCD_DEADLINE 12
 
 AnalogIn potentiometer(A1);
 AnalogIn lightSensor(A0);
@@ -23,28 +26,30 @@ float lux_mean, n_lux_means;
 bool do_lux_mean = false;
 bool buzzer_active = false;
 
+//Timers for timelines
+uint64_t start_read_and_comp_lux;
+uint64_t start_print_lcd;
+
+//Photoresistor
 float calculate_lux() {
     
     float counts = 0;
     for (int i = 0; i < 100; i++) {
       counts = counts + lightSensor.read();
+      ThisThread::sleep_for(1ms);   //Adds delay beetwen reads 100ms in total
     }
     counts = counts / 100;
     
     float vout = counts*5;  //5 Volts as voltage
     counts = (((5 * 500) * vout) - 500) / 10;
-    counts = counts / 1212; //Set value beetwen 0-1
-    
-    if (counts > 1)
-        counts = 1;
-    if (counts < 0)
-        counts = 0;
+    counts = counts / 1200; //Set value beetwen 0-1
     
     return counts;
 }
 
+//LED + potentiometer + photoresistor
 void read_and_comp_lux() {
-    uint64_t start_read_and_comp_lux = get_ms_count();
+    
     lux = calculate_lux();
     pot_mesurement = potentiometer.read();
     
@@ -53,18 +58,27 @@ void read_and_comp_lux() {
         buzzer_active = true;
         pot_mesurement = 0;
     }
-
-    if (lux <= pot_mesurement)
-        lux_compensate = pot_mesurement - lux;
-    else
-        lux_compensate = 0;
+    if(lux < 0) {
+        buzzer.write(0.25);
+        buzzer_active = true;
+        lux = 0;
+    }
+    if(lux > 1) {
+        buzzer.write(0.25);
+        buzzer_active = true;
+        lux = 1;
+    }
     
-    led.write(lux_compensate-lux);
+    lux_compensate = 1 - lux;
 
-
-    printf("Time: %llu //// Potentiometer: %f\n", get_ms_count() - start_read_and_comp_lux, pot_mesurement);
+    // If potentiometer value is < than lux_compensate, we limit it to potentiometer max.
+    if (lux_compensate > pot_mesurement)
+        lux_compensate = pot_mesurement;
+    
+    led.write(lux_compensate);
 }
 
+//LCD main functionality
 void print_lcd() {
     string message = "LUX: " + std::to_string(lux*100) + "%";
     char output[message.length() + 1];
@@ -80,13 +94,15 @@ void print_lcd() {
     rgbLCD.print(output2);
 }
 
+//Button functionalities
 void calculate_lux_mean() {
+    
     lux_mean += lux;
     n_lux_means++;
     
-    if((get_ms_count() - timer_lux_mean) >= 10000) {
+    if((Kernel::get_ms_count() - timer_lux_mean) >= 10000) {
 
-        printf("Last 10s lux: %f:%f:%f", lux_mean, n_lux_means, lux_mean/n_lux_means*100);
+        printf("Last 10s lux: %f", lux_mean/n_lux_means*100);
 
         //Print LCD
         string message = "LAST 10s LUX:";
@@ -103,9 +119,8 @@ void calculate_lux_mean() {
         rgbLCD.print(output2);
 
             
-        do_lux_mean = false;
         button.enable_irq();
-        ThisThread::sleep_for(1s);      //Be able to see result
+        Kernel::attach_idle_hook(NULL);
     }
 }
 
@@ -114,11 +129,32 @@ void button_click() {
     lux_mean = 0;
     n_lux_means = 0;
     do_lux_mean = true;
-    timer_lux_mean = get_ms_count();
+    timer_lux_mean = Kernel::get_ms_count();
+}
+
+//Deadlines
+bool lux_deadline() {
+    if (READ_AND_COMP_LUX_DEADLINE < (Kernel::get_ms_count() - main_timer)) {
+        buzzer.write(0.25);
+        buzzer_active = true;
+        ThisThread::sleep_for(250ms);
+        return true;
+    }
+    return false;
+}
+
+bool lcd_deadline() {
+    if ((READ_AND_COMP_LUX_DEADLINE + LCD_DEADLINE) < (Kernel::get_ms_count() - main_timer)) {
+        buzzer.write(0.25);
+        buzzer_active = true;
+        ThisThread::sleep_for(250ms);
+        return true;
+    }
+    return false;
 }
 
 bool test_deadline() {
-    if (DEADLINE < (get_ms_count() - main_timer)) {
+    if (DEADLINE < (Kernel::get_ms_count() - main_timer)) {
         buzzer.write(0.25);
         buzzer_active = true;
         ThisThread::sleep_for(250ms);
@@ -135,21 +171,31 @@ int main() {
 
   while (true) {
     
-    main_timer = get_ms_count();
-    read_and_comp_lux();
+    main_timer = Kernel::get_ms_count();
     
-    if(!test_deadline()) {
+    //start_read_and_comp_lux = Kernel::get_ms_count();
+    read_and_comp_lux();
+    //printf("Time read_and_comp_lux: %llu\n", Kernel::get_ms_count() - start_read_and_comp_lux);
+    
+    if(!lux_deadline()) {
         
+        //start_print_lcd = Kernel::get_ms_count();
         print_lcd();
+        //printf("Time start_print_lcd: %llu\n", Kernel::get_ms_count() - start_print_lcd);
 
-        if(do_lux_mean)
-            calculate_lux_mean();
-
-        if(!test_deadline()) {
-            uint64_t time_left = DEADLINE - (main_timer - get_ms_count());
-            ThisThread::sleep_for(time_left);
+        if(!lcd_deadline()) {
+            
+            if(do_lux_mean) {
+                do_lux_mean = false;
+                Kernel::attach_idle_hook(calculate_lux_mean);
+            }
+            
+            if(!test_deadline()) {
+                uint64_t time_left = DEADLINE - (Kernel::get_ms_count() - main_timer);
+                //printf("Time left: %llu//%llu\n", time_left, Kernel::get_ms_count() - main_timer);
+                ThisThread::sleep_for(time_left);
+            }
         }
-
     }
     if(buzzer_active) {
         buzzer.write(0.0);
