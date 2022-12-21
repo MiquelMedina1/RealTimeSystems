@@ -7,8 +7,8 @@
 #include <string>
 
 //Thist DEADLINE sets the main loop iteration time to 500ms
-#define DEADLINE 612
-#define READ_AND_COMP_LUX_DEADLINE 100
+#define DEADLINE 500
+#define READ_AND_COMP_LUX_DEADLINE 1
 #define LCD_DEADLINE 12
 
 AnalogIn potentiometer(A1);
@@ -36,7 +36,6 @@ float calculate_lux() {
     float counts = 0;
     for (int i = 0; i < 100; i++) {
       counts = counts + lightSensor.read();
-      ThisThread::sleep_for(1ms);   //Adds delay beetwen reads 100ms in total
     }
     counts = counts / 100;
     
